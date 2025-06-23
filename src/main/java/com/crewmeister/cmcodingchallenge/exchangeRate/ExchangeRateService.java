@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -12,6 +13,7 @@ import java.util.Map;
 
 @RequiredArgsConstructor
 @Service
+
 public class ExchangeRateService {
 
     private final ExchangeRepository exchangeRepository;
@@ -20,11 +22,45 @@ public class ExchangeRateService {
         return rates;
     }
 
+    public ExchangeRate getEuroFxExchangeRateOnDate(LocalDate date, String toCurrency) {
+        if (date.isAfter(LocalDate.now())) {
+            throw new IllegalArgumentException("Exchange rate is not available for future date: " + date);
+        }
+        ExchangeRate rateOnDate = exchangeRepository.findByDateAndCurrencyCode(date, toCurrency)
+                .orElseThrow(() -> new RuntimeException("No rate found on this date"));
+        return rateOnDate;
+    }
+    public BigDecimal getConvertedAmountonDate(BigDecimal amount, String currencyCode, LocalDate date) {
+
+        if("EUR".equalsIgnoreCase(currencyCode)) {
+            return amount;
+        }
+        ExchangeRate rate = getEuroFxExchangeRateOnDate(date, currencyCode);
+        return amount.divide(rate.getRate(), 6, BigDecimal.ROUND_HALF_UP);
+    }
+
     public void initializeExchangeRate(){
-        if(exchangeRepository.count() == 0){
-            exchangeRepository.saveAll(fetchLatestExchangeRate());
+        long count = exchangeRepository.count();
+        if(count == 0){
+            List<ExchangeRate> rates = fetchLatestExchangeRate();
+            LocalDate endDate = LocalDate.now();
+            LocalDate startDate = endDate.minusDays(7);
+            List<ExchangeRate> historicalRates = fetchHistoricalExchangeRate(startDate, endDate);
+
+            if ( historicalRates != null) {
+                rates.addAll(historicalRates);
+            }
+
+            try {
+                exchangeRepository.saveAll(rates);
+                System.out.println("Saved " + rates.size() + " rates");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
     }
+
+
     private Map<String, BigDecimal> getMockExchangeRates() {
         Map<String, BigDecimal> rates = new HashMap<>();
         rates.put("USD", new BigDecimal("1.0842"));
@@ -50,4 +86,25 @@ public class ExchangeRateService {
         }
         return rateList;
     }
+
+    public List<ExchangeRate> fetchHistoricalExchangeRate(LocalDate startDate, LocalDate endDate) {
+        Map<String, BigDecimal> rates = getMockExchangeRates();
+        List<ExchangeRate> historicRateList = new ArrayList<>();
+        while(startDate.isBefore(endDate)){
+
+            if(startDate.getDayOfWeek() == DayOfWeek.SATURDAY || startDate.getDayOfWeek() == DayOfWeek.SUNDAY){
+                startDate = startDate.plusDays(1);
+                continue; //skip weekends for more realistic data
+            }
+            for(Map.Entry<String, BigDecimal> entry : rates.entrySet()){
+                double variation = 0.95 + (Math.random() * 0.1); //ranodom() = [0.0,1)
+                BigDecimal rate = entry.getValue().multiply(BigDecimal.valueOf(variation));
+
+                historicRateList.add(new ExchangeRate(entry.getKey(),startDate,rate));
+            }
+            startDate = startDate.plusDays(1);
+        }
+        return historicRateList;
+    }
+
 }
